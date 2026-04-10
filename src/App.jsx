@@ -151,6 +151,8 @@ function GlobalStyles() {
       ::-webkit-scrollbar { width: 6px; }
       ::-webkit-scrollbar-track { background: #f1f5f9; }
       ::-webkit-scrollbar-thumb { background: #94a3b8; border-radius: 3px; }
+      .chatbot-action-scroll { overflow-x: auto; scrollbar-width: none; -ms-overflow-style: none; }
+      .chatbot-action-scroll::-webkit-scrollbar { display: none; }
     `}</style>
   );
 }
@@ -761,14 +763,18 @@ function MultiSelectCell({ value, row, colOptions, dispatch }) {
   const filtered = colOptions.filter(s => s.toLowerCase().includes(search.toLowerCase())).slice(0, 30);
 
   return (
-    <div style={{ display: "flex", flexWrap: "wrap", gap: 3, alignItems: "center" }}>
-      {selected.map(s => (
-        <span key={s} style={{ ...S.purplePill, fontSize: 10, padding: "2px 6px", borderRadius: 12, display: "inline-flex", alignItems: "center", gap: 3 }}>
-          {s.slice(0, 18)}{s.length > 18 ? ".." : ""}
-          <span onClick={(e) => { e.stopPropagation(); toggle(s); }} style={{ cursor: "pointer", fontWeight: 700, marginLeft: 2 }}>×</span>
+    <div style={{ fontSize: 12, color: "#1f2937", lineHeight: 1.7, whiteSpace: "normal", wordBreak: "break-word" }}>
+      {selected.length > 0 ? selected.map((s, i) => (
+        <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 2 }}>
+          {s}
+          <span onClick={(e) => { e.stopPropagation(); toggle(s); }}
+            style={{ cursor: "pointer", color: "#ef4444", fontWeight: 700, fontSize: 13, lineHeight: 1, marginLeft: 1, userSelect: "none" }}
+            title={`Remove ${s}`}>×</span>
+          {i < selected.length - 1 && <span style={{ color: "#9ca3af", margin: "0 3px" }}>|</span>}
         </span>
-      ))}
-      <button ref={btnRef} onClick={handleOpen} style={{ width: 20, height: 20, borderRadius: 6, border: `1px solid ${C.accent}`, backgroundColor: "#eff6ff", color: C.accent, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>+</button>
+      )) : <span style={{ color: "#9ca3af" }}>—</span>}
+      {/* + button inline after last skill */}
+      <button ref={btnRef} onClick={handleOpen} style={{ width: 18, height: 18, minWidth: 18, borderRadius: 5, border: `1px solid ${C.accent}`, backgroundColor: "#eff6ff", color: C.accent, fontSize: 13, cursor: "pointer", display: "inline-flex", alignItems: "center", justifyContent: "center", padding: 0, verticalAlign: "middle", marginLeft: 4, lineHeight: 1 }}>+</button>
       {open && (
         <div ref={dropRef} onClick={e => e.stopPropagation()} style={{ position: "fixed", top: pos.top, left: pos.left, zIndex: 99999, backgroundColor: "white", border: `1px solid ${C.accent}`, borderRadius: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.25)", minWidth: 220, maxHeight: 280, overflow: "hidden", display: "flex", flexDirection: "column" }}>
           <input value={search} onChange={e => { e.stopPropagation(); setSearch(e.target.value); }} placeholder="Search skills..."
@@ -797,33 +803,54 @@ function MultiSelectCell({ value, row, colOptions, dispatch }) {
 function Chatbot() {
   const { state, dispatch } = useContext(AppContext);
   const [open, setOpen] = useState(false);
-  const [msgs, setMsgs] = useState([{ sender: "assistant", text: "Hello! I'm the Burnsheet Assistant. How can I help you today?\n\nYou can ask me about:\n• Dollar rate changes\n• POC or resource management\n• Data reconciliation\n• Export & PDF generation\n• Filtering & searching\n• Burn analysis" }]);
+  const [msgs, setMsgs] = useState([]);
   const [input, setInput] = useState("");
   const [file, setFile] = useState(null);
   const [pocStep, setPocStep] = useState(null);
   const [ctxTitle, setCtxTitle] = useState("");
   const [typing, setTyping] = useState(false);
   const [hoverBtn, setHoverBtn] = useState(false);
+  const [actionScrollX, setActionScrollX] = useState(0);
+  const [activeActionIdx, setActiveActionIdx] = useState(-1);
   const inputRef = useRef(null);
   const fileRef = useRef(null);
+  const pocFileRef = useRef(null);
   const scrollRef = useRef(null);
+  const actionBarRef = useRef(null);
+
+  const CHAT_WIDTH = 420;
+  const CHAT_HEIGHT = 600;
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [msgs, typing]);
 
+  /* Auto-expand textarea: no scrollbars, cursor at end */
   useEffect(() => {
     if (inputRef.current) {
       inputRef.current.style.height = "auto";
-      inputRef.current.style.height = Math.min(inputRef.current.scrollHeight, 120) + "px";
+      inputRef.current.style.height = inputRef.current.scrollHeight + "px";
     }
   }, [input]);
 
+  /* Focus + cursor at end helper */
+  const focusEnd = () => {
+    setTimeout(() => {
+      if (inputRef.current) {
+        inputRef.current.focus();
+        const len = inputRef.current.value.length;
+        inputRef.current.setSelectionRange(len, len);
+      }
+    }, 50);
+  };
+
+  /* Respond logic */
   const respond = (text) => {
     const lower = text.toLowerCase().trim();
     if (lower === "/clear") { setMsgs([]); setInput(""); setFile(null); setPocStep(null); setCtxTitle(""); return; }
 
-    setMsgs(prev => [...prev, { sender: "user", text }]);
+    setMsgs(prev => [...prev, { sender: "user", text, file: file ? file.name : null }]);
+    setFile(null);
     setTyping(true);
     setTimeout(() => {
       let reply = "";
@@ -841,10 +868,15 @@ function Chatbot() {
       else if (/premium/.test(lower)) reply = `Premium resources: ${state.allData.filter(r => r.classification === "Premium").length} total\n• India: ${state.allData.filter(r => r.classification === "Premium" && r.country === "India").length}\n• USA: ${state.allData.filter(r => r.classification === "Premium" && r.country === "USA").length}`;
       else if (/expert/.test(lower)) reply = `Expert resources: ${state.allData.filter(r => r.classification === "Expert").length} total\n• India: ${state.allData.filter(r => r.classification === "Expert" && r.country === "India").length}\n• USA: ${state.allData.filter(r => r.classification === "Expert" && r.country === "USA").length}`;
       else if (/dollar|change dollar/.test(lower)) reply = "To change the dollar rate:\n1. Click the 💲 $ button below\n2. Enter the new rate\n3. Click 🔄 Reconcile to apply\n\nCurrent rate: $" + state.dollarRate;
+      else if (/create.*poc.*excel|new poc.*excel|uploaded excel.*poc/i.test(lower)) reply = "Processing your uploaded Excel file for new POC creation. The system will parse all POC attributes from the file and add the new POC to the dataset.";
+      else if (/add.*resource.*excel|new resource.*excel|uploaded excel.*resource/i.test(lower)) reply = "Processing your uploaded Excel file for new resource addition. The resource details will be extracted from the file and added to the system.";
       else if (/create poc|new poc/.test(lower)) reply = "To create a new POC:\n1. Click the 📋 POC button below\n2. Select 'New POC'\n3. Upload an Excel file with the resource details\n4. The system will process and add the POC";
       else if (/add resource|new resource/.test(lower)) reply = "To add a new resource:\n1. Click the 📋 POC button below\n2. Select 'New Resource'\n3. Upload an Excel file with the resource data\n4. The system will validate and add the resource";
+      else if (/add.*project.*excel|new project.*excel|uploaded excel.*project/i.test(lower)) reply = "Processing your uploaded Excel file for new project creation. The project details will be parsed and added.";
+      else if (/project/.test(lower)) reply = "To add a new project, click the Projects button below and upload an Excel file with the project details.";
+      else if (/miscellaneous/.test(lower)) reply = "This is a general-purpose input area. You can type any miscellaneous request or query here.";
       else if (/thank/.test(lower)) reply = "You're welcome! 😊 Let me know if you need anything else.";
-      else reply = "I can help you with:\n• 💲 Dollar rate changes\n• 📋 POC / Resource management\n• 🔄 Data reconciliation\n• 📊 Export & PDF generation\n• 🔍 Filtering & searching\n• 📈 Burn analysis\n\nWhat would you like to know?";
+      else reply = "I can help you with:\n• 💲 Dollar rate changes\n• 📋 POC / Resource management\n• 🔄 Data reconciliation\n• 📂 Project management\n• 📊 Export & PDF generation\n• 🔍 Filtering & searching\n• 📈 Burn analysis\n\nWhat would you like to know?";
 
       setMsgs(prev => [...prev, { sender: "assistant", text: reply }]);
       setTyping(false);
@@ -864,6 +896,96 @@ function Chatbot() {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
+  /* POC file upload handler */
+  const handlePocFileUpload = (type) => (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    setFile(f);
+    setPocStep(null);
+    if (type === "poc") {
+      setCtxTitle("CREATE A NEW POC");
+      setInput("Create a new POC using the uploaded Excel file.\n\n");
+    } else {
+      setCtxTitle("ADD A NEW RESOURCE");
+      setInput("Add a new resource using the uploaded Excel file.\n\n");
+    }
+    focusEnd();
+  };
+
+  /* Action bar scroll — selects next/prev button and triggers its action */
+  const scrollAction = (dir) => {
+    const total = actionButtons.length;
+    if (total === 0) return;
+    let newIdx;
+    if (dir === "right") {
+      newIdx = activeActionIdx < total - 1 ? activeActionIdx + 1 : 0;
+    } else {
+      newIdx = activeActionIdx > 0 ? activeActionIdx - 1 : total - 1;
+    }
+    setActiveActionIdx(newIdx);
+    actionButtons[newIdx].action();
+    // scroll the selected button into view
+    if (actionBarRef.current) {
+      const children = actionBarRef.current.children;
+      if (children[newIdx]) {
+        children[newIdx].scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+      }
+    }
+  };
+
+  /* Action button definitions */
+  const actionButtons = [
+    {
+      icon: "💲", label: "$",
+      action: () => {
+        setInput("Change the dollar value from 86 to ");
+        setCtxTitle("CHANGE DOLLAR VALUE");
+        setPocStep(null);
+        setFile(null);
+        focusEnd();
+      },
+    },
+    {
+      icon: "📋", label: "POC",
+      action: () => {
+        setInput("");
+        setPocStep("choose");
+        setCtxTitle("");
+        setFile(null);
+      },
+    },
+    {
+      icon: "🔄", label: "Reconcile",
+      action: () => {
+        setInput("Reconcile the following data or process:\n\n");
+        setCtxTitle("RECONCILE DATA");
+        setPocStep(null);
+        setFile(null);
+        focusEnd();
+      },
+    },
+    {
+      icon: "📂", label: "Projects",
+      action: () => {
+        setInput("Add a new project using the uploaded Excel file.\n\n");
+        setCtxTitle("ADD A NEW PROJECT");
+        setPocStep(null);
+        setFile(null);
+        focusEnd();
+      },
+    },
+    {
+      icon: "📝", label: "Miscellaneous",
+      action: () => {
+        setInput("Enter your miscellaneous request here:\n\n");
+        setCtxTitle("MISCELLANEOUS");
+        setPocStep(null);
+        setFile(null);
+        focusEnd();
+      },
+    },
+  ];
+
   return (
     <>
       {/* Floating Toggle */}
@@ -873,92 +995,194 @@ function Chatbot() {
         <img src={ROBOT_ICON} alt="Chat" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
       </button>
 
+      {/* Hidden file inputs for POC uploads */}
+      <input ref={pocFileRef} type="file" accept=".xlsx,.xls,.csv" hidden />
+
       {/* Chat Panel */}
       {open && (
-        <div style={{ position: "fixed", bottom: 76, right: 24, width: 400, height: 560, backgroundColor: "white", borderRadius: 16, boxShadow: "0 8px 32px rgba(0,0,0,0.2)", zIndex: 150, overflow: "hidden", display: "flex", flexDirection: "column", animation: "fadeIn 0.2s ease" }}>
-          {/* Header */}
-          <div style={{ ...S.gradientPurple, color: "white", padding: "12px 16px", display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: "50%", overflow: "hidden", flexShrink: 0 }}>
+        <div style={{ position: "fixed", bottom: 76, right: 24, width: CHAT_WIDTH, height: CHAT_HEIGHT, backgroundColor: "#f9fafb", borderRadius: 16, boxShadow: "0 8px 32px rgba(0,0,0,0.2)", zIndex: 150, overflow: "hidden", display: "flex", flexDirection: "column", animation: "fadeIn 0.2s ease" }}>
+
+          {/* ── Header / Title Area ── */}
+          <div style={{ ...S.gradientPurple, color: "white", padding: "14px 16px", display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
+            <div style={{ width: 34, height: 34, borderRadius: "50%", overflow: "hidden", flexShrink: 0, border: "2px solid rgba(255,255,255,0.3)" }}>
               <img src={ROBOT_ICON} alt="Bot" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: "50%" }} />
             </div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 700, fontSize: 14 }}>Burnsheet Assistant</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, opacity: 0.9 }}>
-                <div style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#10b981" }} /> Online
+              <div style={{ fontWeight: 700, fontSize: 15 }}>Burnsheet Assistant</div>
+              <div style={{ fontSize: 12, opacity: 0.92, marginTop: 2 }}>
+                Hi! 👋 I'm your Burnsheet Assistant. How can I help you today?
               </div>
             </div>
-            <button onClick={() => setOpen(false)} style={{ background: "none", border: "none", color: "white", fontSize: 18, cursor: "pointer", padding: "4px 8px" }}>✕</button>
+            <button onClick={() => setOpen(false)} style={{ background: "rgba(255,255,255,0.15)", border: "none", color: "white", fontSize: 16, cursor: "pointer", padding: "4px 8px", borderRadius: 6, lineHeight: 1 }}>✕</button>
           </div>
 
-          {/* Messages */}
-          <div ref={scrollRef} style={{ flex: 1, overflow: "auto", padding: "14px 16px", minHeight: 0 }}>
+          {/* ── Chat History (continuous, Copilot-style) ── */}
+          <div ref={scrollRef} style={{ flex: 1, overflow: "auto", padding: "16px 16px 8px", minHeight: 0 }}>
+            {msgs.length === 0 && !typing && (
+              <div style={{ textAlign: "center", color: "#9ca3af", fontSize: 13, marginTop: 40 }}>
+                Start a conversation by typing below or clicking an action button.
+              </div>
+            )}
             {msgs.map((m, i) => (
-              <div key={i} style={{ marginBottom: 4 }}>
-                {i > 0 && <div style={{ borderBottom: "1px solid #f0f0f0", marginTop: 12, marginBottom: 8 }} />}
-                <div style={{ fontSize: 10, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.6, color: m.sender === "user" ? C.accent : "#6b7280", marginBottom: 3 }}>
-                  {m.sender === "user" ? "YOU" : "ASSISTANT"}
+              <div key={i} style={{ marginBottom: 2, animation: "slideIn 0.25s ease" }}>
+                {i > 0 && <div style={{ borderBottom: "1px solid #ececec", margin: "10px 0 8px" }} />}
+                <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3 }}>
+                  {m.sender === "assistant" && (
+                    <div style={{ width: 18, height: 18, borderRadius: "50%", overflow: "hidden", flexShrink: 0 }}>
+                      <img src={ROBOT_ICON} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                    </div>
+                  )}
+                  <span style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: 0.5, color: m.sender === "user" ? C.accent : "#6b7280" }}>
+                    {m.sender === "user" ? "You" : "Assistant"}
+                  </span>
                 </div>
-                <div style={{ fontSize: 13, color: "#1f2937", lineHeight: 1.55, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{m.text}</div>
+                <div style={{ fontSize: 13, color: "#1f2937", lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word", paddingLeft: m.sender === "assistant" ? 23 : 0 }}>
+                  {m.text}
+                </div>
+                {m.file && (
+                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4, paddingLeft: m.sender === "assistant" ? 23 : 0 }}>
+                    📎 {m.file}
+                  </div>
+                )}
               </div>
             ))}
             {typing && (
-              <div style={{ display: "flex", gap: 4, padding: "8px 0" }}>
-                {[0, 1, 2].map(i => (
-                  <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#9ca3af", animation: `bounce 1.4s infinite ${i * 0.2}s` }} />
-                ))}
+              <div style={{ display: "flex", alignItems: "center", gap: 5, padding: "10px 0 4px" }}>
+                <div style={{ width: 18, height: 18, borderRadius: "50%", overflow: "hidden", flexShrink: 0 }}>
+                  <img src={ROBOT_ICON} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                </div>
+                <div style={{ display: "flex", gap: 4 }}>
+                  {[0, 1, 2].map(i => (
+                    <div key={i} style={{ width: 6, height: 6, borderRadius: "50%", backgroundColor: "#9ca3af", animation: `bounce 1.4s infinite ${i * 0.2}s` }} />
+                  ))}
+                </div>
               </div>
             )}
           </div>
 
-          {/* POC Sub-choices */}
+          {/* ── POC Sub-choices (inline, not modal, not card) ── */}
           {pocStep === "choose" && (
-            <div style={{ backgroundColor: "#fafbff", padding: "8px 12px", borderTop: `1px solid ${C.border}`, display: "flex", gap: 8 }}>
-              <button onClick={() => { setPocStep(null); setCtxTitle("CREATE A NEW POC"); setInput("Create a new POC using the uploaded Excel file.\n\n"); }}
-                style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.accent}`, backgroundColor: "white", color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>📋 New POC</button>
-              <button onClick={() => { setPocStep(null); setCtxTitle("ADD A NEW RESOURCE"); setInput("Add a new resource using the uploaded Excel file.\n\n"); }}
-                style={{ flex: 1, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.accent}`, backgroundColor: "white", color: C.accent, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>👤 New Resource</button>
+            <div style={{ padding: "8px 16px", borderTop: `1px solid #ececec`, display: "flex", flexDirection: "column", gap: 6, backgroundColor: "#f9fafb" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#6b7280" }}>Select an option:</div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button onClick={() => {
+                  const inp = document.createElement("input");
+                  inp.type = "file"; inp.accept = ".xlsx,.xls,.csv";
+                  inp.onchange = (ev) => {
+                    const f = ev.target.files[0];
+                    if (!f) return;
+                    setFile(f); setPocStep(null);
+                    setCtxTitle("CREATE A NEW POC");
+                    setInput("Create a new POC using the uploaded Excel file.\n\n");
+                    focusEnd();
+                  };
+                  inp.click();
+                }}
+                  style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${C.accent}`, backgroundColor: "white", color: C.accent, fontSize: 14, fontWeight: 700, cursor: "pointer", transition: "all 0.15s ease" }}
+                  onMouseEnter={e => { e.currentTarget.style.backgroundColor = "#eef1fd"; }}
+                  onMouseLeave={e => { e.currentTarget.style.backgroundColor = "white"; }}>
+                  📋 New POC
+                </button>
+                <button onClick={() => {
+                  const inp = document.createElement("input");
+                  inp.type = "file"; inp.accept = ".xlsx,.xls,.csv";
+                  inp.onchange = (ev) => {
+                    const f = ev.target.files[0];
+                    if (!f) return;
+                    setFile(f); setPocStep(null);
+                    setCtxTitle("ADD A NEW RESOURCE");
+                    setInput("Add a new resource using the uploaded Excel file.\n\n");
+                    focusEnd();
+                  };
+                  inp.click();
+                }}
+                  style={{ flex: 1, padding: "10px 12px", borderRadius: 10, border: `1.5px solid ${C.accent}`, backgroundColor: "white", color: C.accent, fontSize: 14, fontWeight: 700, cursor: "pointer", transition: "all 0.15s ease" }}
+                  onMouseEnter={e => { e.currentTarget.style.backgroundColor = "#eef1fd"; }}
+                  onMouseLeave={e => { e.currentTarget.style.backgroundColor = "white"; }}>
+                  👤 New Resource
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Input Area */}
-          <div style={{ backgroundColor: "#fafbff", padding: "10px 12px 6px", borderTop: `1px solid ${C.border}` }}>
+          {/* ── Input Area (fixed 56px min height, auto-expand, no scrollbar) ── */}
+          <div style={{ backgroundColor: "#ffffff", padding: "10px 12px 6px", borderTop: `1px solid #ececec`, flexShrink: 0 }}>
+            {/* Attached file badge */}
             {file && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, fontSize: 11, color: "#6b7280" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6, fontSize: 11, color: "#6b7280", backgroundColor: "#f0f4ff", borderRadius: 6, padding: "4px 8px" }}>
                 📎 {file.name}
-                <button onClick={() => setFile(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#ef4444" }}>×</button>
+                <button onClick={() => setFile(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "#ef4444", fontWeight: 700, lineHeight: 1 }}>×</button>
               </div>
             )}
-            {ctxTitle && <div style={{ fontSize: 10, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>{ctxTitle}</div>}
-            <div style={{ display: "flex", alignItems: "flex-end", backgroundColor: "white", border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "6px 8px" }}>
+            {/* Context title */}
+            {ctxTitle && <div style={{ fontSize: 11, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 4 }}>{ctxTitle}</div>}
+            {/* Input box with + and send */}
+            <div style={{ display: "flex", alignItems: "flex-end", backgroundColor: "#f9fafb", border: `1.5px solid ${C.border}`, borderRadius: 12, padding: "6px 8px", minHeight: 112, transition: "border-color 0.15s ease" }}
+              onFocus={e => e.currentTarget.style.borderColor = C.accent}
+              onBlur={e => e.currentTarget.style.borderColor = C.border}>
+              {/* + file attach */}
               <button onClick={() => fileRef.current?.click()}
-                style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#9ca3af", padding: "2px 4px", flexShrink: 0 }}>+</button>
-              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={e => { if (e.target.files[0]) setFile(e.target.files[0]); }} />
-              <textarea ref={inputRef} value={input} onChange={e => setInput(e.target.value)} onKeyDown={handleKeyDown}
+                style={{ background: "none", border: "none", fontSize: 20, cursor: "pointer", color: "#9ca3af", padding: "4px 4px", flexShrink: 0, lineHeight: 1 }}
+                title="Attach file">+</button>
+              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={e => { if (e.target.files[0]) { setFile(e.target.files[0]); e.target.value = ""; } }} />
+              {/* Textarea */}
+              <textarea
+                ref={inputRef}
+                value={input}
+                onChange={e => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="Type a message..."
-                rows={1} style={{ flex: 1, border: "none", outline: "none", fontSize: 13, resize: "none", overflow: "hidden", maxHeight: 120, lineHeight: 1.4, padding: "4px 6px", fontFamily: "inherit" }} />
+                rows={3}
+                style={{
+                  flex: 1, border: "none", outline: "none", fontSize: 13, resize: "none",
+                  overflow: "hidden", lineHeight: 1.5, padding: "6px 6px", fontFamily: "inherit",
+                  backgroundColor: "transparent", minHeight: 72,
+                }}
+              />
+              {/* Send button */}
               <button onClick={send}
-                style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: input.trim() ? C.accent : "#d1d5db", padding: "2px 4px", flexShrink: 0 }}>➤</button>
+                style={{ background: input.trim() ? C.accent : "transparent", border: "none", fontSize: 16, cursor: input.trim() ? "pointer" : "default", color: input.trim() ? "white" : "#d1d5db", padding: "6px 8px", flexShrink: 0, borderRadius: 8, lineHeight: 1, transition: "all 0.15s ease" }}
+                title="Send">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+              </button>
             </div>
           </div>
 
-          {/* Action Buttons */}
-          <div style={{ padding: "6px 12px 10px", backgroundColor: "#fafbff", display: "flex", alignItems: "center", gap: 10 }}>
-            <button style={{ width: 30, height: 30, border: `1px solid ${C.border}`, borderRadius: 8, background: "white", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>◀</button>
-            <div style={{ flex: 1, display: "flex", gap: 10, justifyContent: "center" }}>
-              {[
-                { icon: "💲", label: "$", action: () => { setInput("Change the dollar value from 86 to "); setCtxTitle(""); setPocStep(null); setTimeout(() => inputRef.current?.focus(), 100); } },
-                { icon: "📋", label: "POC", action: () => { setInput(""); setPocStep("choose"); setCtxTitle(""); } },
-                { icon: "🔄", label: "Reconcile", action: () => { setInput("Reconcile the following data or process:\n\n"); setCtxTitle(""); setPocStep(null); setTimeout(() => inputRef.current?.focus(), 100); } },
-              ].map(btn => (
-                <button key={btn.label} onClick={btn.action}
-                  style={{ minWidth: 80, height: 34, borderRadius: 10, border: `1.5px solid ${C.border}`, backgroundColor: "white", cursor: "pointer", fontSize: 13, fontWeight: 500, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}
-                  onMouseEnter={e => { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.backgroundColor = "#f0f4ff"; }}
-                  onMouseLeave={e => { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.backgroundColor = "white"; }}>
-                  {btn.icon} {btn.label}
-                </button>
-              ))}
+          {/* ── Action Button Bar (horizontal scroll, left/right arrows) ── */}
+          <div style={{ padding: "14px 8px 16px", backgroundColor: "#ffffff", display: "flex", alignItems: "flex-start", gap: 6, flexShrink: 0, borderTop: `1px solid #ececec`, position: "relative", zIndex: 2 }}>
+            {/* Left arrow */}
+            <button onClick={() => scrollAction("left")}
+              style={{ width: 28, height: 28, minWidth: 28, marginTop: 12, border: `1px solid ${C.border}`, borderRadius: 8, background: "white", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#6b7280" }}>◀</button>
+            {/* Scrollable button container — single div with ref */}
+            <div
+              ref={actionBarRef}
+              className="chatbot-action-scroll"
+              style={{ flex: 1, display: "flex", gap: 8, overflowX: "auto", scrollBehavior: "smooth", scrollbarWidth: "none", msOverflowStyle: "none", alignItems: "center", justifyContent: "center" }}>
+              {actionButtons.map((btn, idx) => {
+                const isActive = activeActionIdx === idx;
+                return (
+                <div key={btn.label} style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, flexShrink: 0 }}>
+                  <button onClick={() => { setActiveActionIdx(idx); btn.action(); }}
+                    style={{
+                      width: 52, height: 52, minWidth: 52, minHeight: 52, borderRadius: 12,
+                      border: `1.5px solid ${isActive ? C.accent : C.border}`,
+                      backgroundColor: isActive ? "#eef1fd" : "white", cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      transition: "all 0.15s ease", flexShrink: 0,
+                      boxShadow: isActive ? `0 0 0 2px ${C.accent}44` : "none",
+                    }}
+                    onMouseEnter={e => { if (!isActive) { e.currentTarget.style.borderColor = C.accent; e.currentTarget.style.backgroundColor = "#f0f4ff"; e.currentTarget.style.boxShadow = `0 2px 8px rgba(0,0,0,0.1)`; } }}
+                    onMouseLeave={e => { if (!isActive) { e.currentTarget.style.borderColor = C.border; e.currentTarget.style.backgroundColor = "white"; e.currentTarget.style.boxShadow = "none"; } }}>
+                    <span style={{ fontSize: 20, lineHeight: 1 }}>{btn.icon}</span>
+                  </button>
+                  <span style={{ fontSize: 10, fontWeight: 600, color: isActive ? C.accent : "#4b5563", lineHeight: 1, whiteSpace: "nowrap" }}>{btn.label}</span>
+                </div>
+                );
+              })}
             </div>
-            <button style={{ width: 30, height: 30, border: `1px solid ${C.border}`, borderRadius: 8, background: "white", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center" }}>▶</button>
+            {/* Right arrow */}
+            <button onClick={() => scrollAction("right")}
+              style={{ width: 28, height: 28, minWidth: 28, marginTop: 12, border: `1px solid ${C.border}`, borderRadius: 8, background: "white", cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#6b7280" }}>▶</button>
           </div>
         </div>
       )}
@@ -1064,7 +1288,7 @@ function DataTable() {
     { key: "empId", label: "Emp ID", w: 85 }, { key: "name", label: "Name", w: 160 },
     { key: "sowStream", label: "SOW Stream", w: 85 }, { key: "location", label: "Location", w: 110, edit: "select" },
     { key: "classification", label: "Classification", w: 100 }, { key: "actPct", label: "ACT/PCT", w: 110, edit: "select" },
-    { key: "skillSet", label: "Skill Set", w: 200, edit: "multi" }, { key: "serviceLine", label: "Service Line", w: 90, edit: "select" },
+    { key: "skillSet", label: "Skill Set", w: 260, edit: "multi" }, { key: "serviceLine", label: "Service Line", w: 90, edit: "select" },
     { key: "verizonLevel", label: "VZ Level", w: 140 }, { key: "skillCategory", label: "Skill Cat", w: 85 },
     { key: "designation", label: "Designation", w: 80 }, { key: "timesheetHrs", label: "Timesheet", w: 85, edit: "input" },
     { key: "rateInr", label: "Rate ₹/hr", w: 80, indiaOnly: true }, { key: "rateUsd", label: "Rate $/hr", w: 80 },
@@ -1199,7 +1423,7 @@ function DataTable() {
                         const cellVal = r[col.key];
                         const titleText = (typeof cellVal === "string" && cellVal.length > 20) ? cellVal : undefined;
                         return (
-                          <td key={col.key} title={titleText} style={{ padding: "6px 8px", textAlign: "left", borderBottom: `1px solid ${C.border}`, minWidth: col.w, maxWidth: col.w + 80, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: col.edit === "multi" ? "normal" : "nowrap" }}>
+                          <td key={col.key} title={titleText} style={{ padding: "6px 8px", textAlign: "left", borderBottom: `1px solid ${C.border}`, minWidth: col.w, maxWidth: col.edit === "multi" ? "none" : col.w + 80, overflow: col.edit === "multi" ? "visible" : "hidden", textOverflow: col.edit === "multi" ? "unset" : "ellipsis", whiteSpace: col.edit === "multi" ? "normal" : "nowrap" }}>
                             {renderCell(r, col)}
                           </td>
                         );
