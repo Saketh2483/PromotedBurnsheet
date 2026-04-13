@@ -832,21 +832,36 @@ function Chatbot() {
   const fileRef = useRef(null);
   const scrollRef = useRef(null);
   const actionBarRef = useRef(null);
+  const cardRef = useRef(null);
 
   const CHAT_W = 390;
   const CHAT_H = 380;
 
+  /* Scroll chat to bottom */
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [msgs, typing]);
 
-  /* Auto-expand textarea */
-  useEffect(() => {
-    if (inputRef.current) {
-      inputRef.current.style.height = "0";
-      inputRef.current.style.height = Math.max(36, inputRef.current.scrollHeight) + "px";
+  /* Auto-resize the input card to fit content, min 56px */
+  const resizeCard = () => {
+    const ta = inputRef.current;
+    if (!ta) return;
+    ta.style.height = "0";
+    const sh = ta.scrollHeight;
+    ta.style.height = sh + "px";
+    /* Also resize the card container */
+    if (cardRef.current) {
+      /* Title ~18px + padding 16px + textarea scrollHeight + buttons row if present */
+      const titleEl = cardRef.current.querySelector("[data-ctx-title]");
+      const titleH = titleEl ? titleEl.offsetHeight + 4 : 0;
+      const fileEl = cardRef.current.querySelector("[data-file-badge]");
+      const fileH = fileEl ? fileEl.offsetHeight + 4 : 0;
+      const inner = sh + titleH + fileH + 16; /* 16 = vertical padding */
+      cardRef.current.style.height = Math.max(56, inner) + "px";
     }
-  }, [input]);
+  };
+
+  useEffect(() => { resizeCard(); }, [input, ctxTitle, file]);
 
   /* Focus + cursor at end helper */
   const focusEnd = () => {
@@ -855,8 +870,7 @@ function Chatbot() {
         inputRef.current.focus();
         const len = inputRef.current.value.length;
         inputRef.current.setSelectionRange(len, len);
-        inputRef.current.style.height = "0";
-        inputRef.current.style.height = Math.max(36, inputRef.current.scrollHeight) + "px";
+        resizeCard();
       }
     }, 30);
   };
@@ -940,15 +954,15 @@ function Chatbot() {
     },
     {
       icon: "🔄", label: "Reconcile",
-      action: () => { setInput("Reconcile the following data or process:\n\n"); setCtxTitle("RECONCILE DATA"); setPocStep(null); setFile(null); focusEnd(); },
+      action: () => { setInput("Reconcile the following data or process:\n"); setCtxTitle("RECONCILE DATA"); setPocStep(null); setFile(null); focusEnd(); },
     },
     {
       icon: "📂", label: "Projects",
-      action: () => { setInput("Add a new project using the uploaded Excel file.\n\n"); setCtxTitle("ADD A NEW PROJECT"); setPocStep(null); setFile(null); focusEnd(); },
+      action: () => { setInput("Add a new project using the uploaded Excel file.\n"); setCtxTitle("ADD A NEW PROJECT"); setPocStep(null); setFile(null); focusEnd(); },
     },
     {
       icon: "📝", label: "Misc",
-      action: () => { setInput("Enter your miscellaneous request here:\n\n"); setCtxTitle("MISCELLANEOUS"); setPocStep(null); setFile(null); focusEnd(); },
+      action: () => { setInput("Enter your miscellaneous request here:\n"); setCtxTitle("MISCELLANEOUS"); setPocStep(null); setFile(null); focusEnd(); },
     },
   ];
 
@@ -1025,8 +1039,8 @@ function Chatbot() {
             <div style={{ padding: "6px 14px 4px", borderTop: "1px solid #ececec", display: "flex", flexDirection: "column", gap: 5, backgroundColor: "#fff", flexShrink: 0 }}>
               <div style={{ fontSize: 11, fontWeight: 600, color: "#6b7280" }}>Select an option:</div>
               <div style={{ display: "flex", gap: 8 }}>
-                {[{ label: "📋 New POC", type: "poc", title: "CREATE A NEW POC", prompt: "Create a new POC using the uploaded Excel file.\n\n" },
-                  { label: "👤 New Resource", type: "res", title: "ADD A NEW RESOURCE", prompt: "Add a new resource using the uploaded Excel file.\n\n" }
+                {[{ label: "📋 New POC", type: "poc", title: "CREATE A NEW POC", prompt: "Create a new POC using the uploaded Excel file.\n" },
+                  { label: "👤 New Resource", type: "res", title: "ADD A NEW RESOURCE", prompt: "Add a new resource using the uploaded Excel file.\n" }
                 ].map(opt => (
                   <button key={opt.type} onClick={() => {
                     const inp = document.createElement("input");
@@ -1047,46 +1061,51 @@ function Chatbot() {
             </div>
           )}
 
-          {/* ── INPUT AREA (56px height) ── */}
+          {/* ── INPUT CARD AREA (min 56px, auto-expands to fit content) ── */}
           <div style={{ backgroundColor: "#fff", padding: "6px 10px 4px", borderTop: "1px solid #ececec", flexShrink: 0 }}>
-            {/* File badge */}
-            {file && (
-              <div style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4, fontSize: 10, color: "#6b7280", backgroundColor: "#f0f4ff", borderRadius: 5, padding: "3px 7px" }}>
-                📎 {file.name}
-                <button onClick={() => setFile(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 12, color: "#ef4444", fontWeight: 700, lineHeight: 1 }}>×</button>
+            <div ref={cardRef}
+              style={{ display: "flex", flexDirection: "column", backgroundColor: "#f4f6fa", border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "6px 8px", minHeight: 56, transition: "border-color 0.15s", overflow: "hidden" }}
+              onFocus={e => { if (cardRef.current) cardRef.current.style.borderColor = C.accent; }}
+              onBlur={e => { if (cardRef.current) cardRef.current.style.borderColor = C.border; }}>
+              {/* Context title inside the card */}
+              {ctxTitle && (
+                <div data-ctx-title style={{ fontSize: 10, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 2, lineHeight: 1.2 }}>{ctxTitle}</div>
+              )}
+              {/* File badge inside the card */}
+              {file && (
+                <div data-file-badge style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 3, fontSize: 10, color: "#6b7280" }}>
+                  📎 {file.name}
+                  <button onClick={() => setFile(null)} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 11, color: "#ef4444", fontWeight: 700, lineHeight: 1, padding: 0 }}>×</button>
+                </div>
+              )}
+              {/* Row: + attach | textarea | send */}
+              <div style={{ display: "flex", alignItems: "flex-end", flex: 1, gap: 2 }}>
+                {/* + attach */}
+                <button onClick={() => fileRef.current?.click()}
+                  style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#9ca3af", padding: "2px 3px", flexShrink: 0, lineHeight: 1, alignSelf: "flex-end" }}
+                  title="Attach file">+</button>
+                <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={e => { if (e.target.files[0]) { setFile(e.target.files[0]); e.target.value = ""; } }} />
+                {/* Textarea - auto-expands, no scrollbar */}
+                <textarea
+                  ref={inputRef}
+                  value={input}
+                  onChange={e => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Type a message..."
+                  rows={1}
+                  style={{
+                    flex: 1, border: "none", outline: "none", fontSize: 12.5, resize: "none",
+                    overflow: "hidden", lineHeight: 1.45, padding: "4px 2px", fontFamily: "inherit",
+                    backgroundColor: "transparent", minHeight: 24,
+                  }}
+                />
+                {/* Send */}
+                <button onClick={send}
+                  style={{ background: input.trim() ? C.accent : "transparent", border: "none", fontSize: 14, cursor: input.trim() ? "pointer" : "default", color: input.trim() ? "white" : "#d1d5db", padding: "5px 7px", flexShrink: 0, borderRadius: 7, lineHeight: 1, transition: "all 0.15s", alignSelf: "flex-end" }}
+                  title="Send">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
+                </button>
               </div>
-            )}
-            {/* Context title */}
-            {ctxTitle && <div style={{ fontSize: 10, fontWeight: 700, color: C.accent, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 3 }}>{ctxTitle}</div>}
-            {/* Input row */}
-            <div style={{ display: "flex", alignItems: "flex-end", backgroundColor: "#f4f6fa", border: `1.5px solid ${C.border}`, borderRadius: 10, padding: "4px 6px", height: 56, minHeight: 56, transition: "border-color 0.15s" }}
-              onFocus={e => e.currentTarget.style.borderColor = C.accent}
-              onBlur={e => e.currentTarget.style.borderColor = C.border}>
-              {/* + attach */}
-              <button onClick={() => fileRef.current?.click()}
-                style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", color: "#9ca3af", padding: "2px 3px", flexShrink: 0, lineHeight: 1 }}
-                title="Attach file">+</button>
-              <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" hidden onChange={e => { if (e.target.files[0]) { setFile(e.target.files[0]); e.target.value = ""; } }} />
-              {/* Textarea */}
-              <textarea
-                ref={inputRef}
-                value={input}
-                onChange={e => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder="Type a message..."
-                rows={1}
-                style={{
-                  flex: 1, border: "none", outline: "none", fontSize: 12.5, resize: "none",
-                  overflow: "hidden", lineHeight: 1.45, padding: "6px 4px", fontFamily: "inherit",
-                  backgroundColor: "transparent", minHeight: 36, maxHeight: 120,
-                }}
-              />
-              {/* Send */}
-              <button onClick={send}
-                style={{ background: input.trim() ? C.accent : "transparent", border: "none", fontSize: 14, cursor: input.trim() ? "pointer" : "default", color: input.trim() ? "white" : "#d1d5db", padding: "5px 7px", flexShrink: 0, borderRadius: 7, lineHeight: 1, transition: "all 0.15s" }}
-                title="Send">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" /></svg>
-              </button>
             </div>
           </div>
 
