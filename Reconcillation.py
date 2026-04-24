@@ -18,6 +18,8 @@ Start:
 """
 
 import os, sys, json, base64, traceback, re
+import importlib
+from typing import Optional, List, Dict
 from urllib.parse import parse_qs, urlparse, unquote
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -25,8 +27,14 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # 1. Environment & credential bootstrap
 # ---------------------------------------------------------------------------
-from dotenv import load_dotenv
-load_dotenv()
+try:
+    _dotenv = importlib.import_module("dotenv")
+    load_dotenv = getattr(_dotenv, "load_dotenv", lambda: None)
+    load_dotenv()
+except Exception:
+    # dotenv isn't required at runtime — allow operation without it.
+    def load_dotenv():
+        return None
 
 BEARER_TOKEN = os.getenv("AWS_BEARER_TOKEN_BEDROCK", "")
 REGION = os.getenv("AWS_REGION", "us-west-1")
@@ -80,8 +88,25 @@ def _extract_credentials_from_bearer_token():
 # 2. Strands tool -- reconcile timesheet in Excel
 # ---------------------------------------------------------------------------
 import openpyxl
-from strands import Agent, tool
-from strands.models.bedrock import BedrockModel
+try:
+    from strands import Agent, tool  # type: ignore
+    from strands.models.bedrock import BedrockModel  # type: ignore
+    _STRANDS_AVAILABLE = True
+except Exception:
+    # Provide safe fallbacks so runtime usage that doesn't need strands can continue.
+    _STRANDS_AVAILABLE = False
+
+    Agent = None
+
+    def tool(fn=None, **kwargs):
+        # If used as a decorator, return the original function so direct calls still work.
+        return fn
+
+    class BedrockModel:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError(
+                "BedrockModel is unavailable: install 'strands-agents' and 'strands-agents-bedrock'"
+            )
 
 
 @tool
@@ -267,13 +292,47 @@ def _get_agent():
 # ---------------------------------------------------------------------------
 # 4. FastAPI application
 # ---------------------------------------------------------------------------
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, List
+try:
+    _fastapi = importlib.import_module("fastapi")
+    FastAPI = getattr(_fastapi, "FastAPI")
+    HTTPException = getattr(_fastapi, "HTTPException")
+    _fastapi_cors = importlib.import_module("fastapi.middleware.cors")
+    CORSMiddleware = getattr(_fastapi_cors, "CORSMiddleware")
+    _pydantic = importlib.import_module("pydantic")
+    BaseModel = getattr(_pydantic, "BaseModel")
+    _FASTAPI_AVAILABLE = True
+except Exception:
+    # FastAPI / Pydantic aren't available. Provide minimal placeholders so
+    # importing this module won't crash tooling — endpoints will raise if used.
+    _FASTAPI_AVAILABLE = False
+
+    class HTTPException(Exception):
+        def __init__(self, status_code: int = 500, detail: str = ""):
+            super().__init__(detail)
+            self.status_code = status_code
+            self.detail = detail
+
+    class BaseModel:
+        def __init__(self, **kwargs):
+            for k, v in kwargs.items():
+                setattr(self, k, v)
+
+    class FastAPI:  # minimal stub
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def add_middleware(self, *args, **kwargs):
+            pass
+
+    class CORSMiddleware:  # stub
+        pass
 
 app = FastAPI(title="Reconciliation Agent API", version="1.0.0")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+try:
+    app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+except Exception:
+    # If middleware isn't available (stubbed), ignore.
+    pass
 
 
 class AgentRequest(BaseModel):
@@ -396,7 +455,10 @@ def get_all_data():
 # 5. Entrypoint
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import uvicorn
+    try:
+        uvicorn = importlib.import_module("uvicorn")
+    except Exception:
+        uvicorn = None
 
     HOST = "0.0.0.0"
     PORT = 8000

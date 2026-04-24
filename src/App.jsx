@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useReducer, createContext, useContext, useMemo, useCallback } from "react";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from "recharts";
 import { exportBurnsheetExcel } from "./exportExcel.js";
+import Login from "./Login";
 
 const API_BASE = "http://localhost:8000";
 
@@ -225,7 +226,7 @@ function LoadingSpinner() {
 
 /* ═══════════════════ HEADER ═══════════════════ */
 function Header() {
-  const { state, dispatch } = useContext(AppContext);
+  const { state, dispatch, onLogout } = useContext(AppContext);
   const [dropOpen, setDropOpen] = useState(false);
   const dropRef = useRef(null);
   useEffect(() => {
@@ -253,6 +254,13 @@ function Header() {
                 {r}
               </div>
             ))}
+            <div style={{ borderTop: `1px solid ${C.border}` }} />
+            <div onClick={() => { setDropOpen(false); onLogout(); }}
+              style={{ padding: "10px 16px", fontSize: 13, fontWeight: 500, color: "#d32f2f", cursor: "pointer", backgroundColor: "white" }}
+              onMouseEnter={e => { e.target.style.backgroundColor = "#fdecea"; }}
+              onMouseLeave={e => { e.target.style.backgroundColor = "white"; }}>
+              Logout
+            </div>
           </div>
         )}
       </div>
@@ -1501,6 +1509,7 @@ function ResourceBurnView() {
 
 /* ═══════════════════ APP ═══════════════════ */
 export default function App() {
+  const [loggedIn, setLoggedIn] = useState(false);
   const [state, dispatch] = useReducer(reducer, initialState);
 
   // Fetch Excel data on mount
@@ -1516,10 +1525,14 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => { refreshData(); }, [refreshData]);
+  useEffect(() => { if (loggedIn) refreshData(); }, [loggedIn, refreshData]);
+
+  if (!loggedIn) {
+    return <Login onLogin={() => setLoggedIn(true)} />;
+  }
 
   return (
-    <AppContext.Provider value={{ state, dispatch, refreshData }}>
+    <AppContext.Provider value={{ state, dispatch, refreshData, onLogout: () => setLoggedIn(false) }}>
       <GlobalStyles />
       {/* Fixed background div */}
       <div style={{ position: "fixed", inset: 0, zIndex: -1, backgroundColor: C.bg }} />

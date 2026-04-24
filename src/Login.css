@@ -1,0 +1,134 @@
+.login-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  margin: 0;
+  padding: 0;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
+.login-card {
+  background: #fff;
+  border-radius: 16px;
+  padding: 40px 36px;
+  max-width: 380px;
+  width: 100%;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  text-align: center;
+}
+
+.login-card--wide {
+  max-width: 420px;
+}
+
+.login-card h2 {
+  color: #333;
+  margin-bottom: 28px;
+  font-size: 1.6rem;
+}
+
+.login-field {
+  text-align: left;
+  margin-bottom: 18px;
+}
+
+.login-field label {
+  display: block;
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 6px;
+  font-size: 14px;
+}
+
+.login-field input {
+  width: 100%;
+  padding: 10px 14px;
+  border: 2px solid #ddd;
+  border-radius: 8px;
+  font-size: 14px;
+  box-sizing: border-box;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.login-field input:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.login-error {
+  color: #cc0000;
+  background: #ffeeee;
+  border: 1px solid #ffcccc;
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 13px;
+  margin-bottom: 14px;
+}
+
+.login-btn {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.login-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+}
+
+.login-links {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-top: 20px;
+  gap: 4px;
+}
+
+.forgot-password-link,
+.signup-link {
+  background: none;
+  border: none;
+  color: #667eea;
+  font-weight: 600;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0;
+  transition: color 0.2s;
+}
+
+.forgot-password-link:hover,
+.signup-link:hover {
+  color: #764ba2;
+  text-decoration: underline;
+}
+
+.signup-separator {
+  color: #ccc;
+  margin: 0 8px;
+}
+
+.auth-icon {
+  font-size: 2.5rem;
+  margin-bottom: 12px;
+}
+
+.auth-subtitle {
+  color: #777;
+  font-size: 13.5px;
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
