@@ -901,7 +901,6 @@ function Chatbot() {
       ta.style.height = ta.scrollHeight + "px";
     }, 40);
   };
-
   /* ── Respond logic ── */
   const respond = async (text) => {
     const lower = text.toLowerCase().trim();
@@ -909,22 +908,54 @@ function Chatbot() {
     setMsgs(prev => [...prev, { sender: "user", text, file: file ? file.name : null }]);
     setFile(null); setTyping(true);
 
-    // Check if this is a reconcile request that should go to the agent
-    const isReconcile = /reconcile.*(?:timesheet|hours|hrs)|(?:update|change|set).*(?:timesheet|hours|hrs).*(?:for|of)|reconcile.*(?:emp|employee|\d{4,})/i.test(lower);
+    // --- Reconcile-related detection ---
+    const isExactReconcile = lower === "reconcile";
+    const containsReconcileWord = /\breconcile\b/i.test(lower);
+    const isReconcileRelated = isExactReconcile || containsReconcileWord || /(?:update|change|set).*(?:timesheet|hours|hrs)/i.test(lower);
 
-    if (isReconcile) {
+    if (isReconcileRelated) {
       try {
-        // Try direct reconcile first (faster, no LLM needed)
-        // Extract identifier and hours from the prompt
-        const hrsMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:hours|hrs)/i);
-        const idMatch = text.match(/(?:emp(?:loyee)?(?:\s*id)?[:\s]+|for\s+|of\s+)(\d{4,})/i);
-        const nameMatch = text.match(/(?:for|of|employee)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)/);
+        // Extract hours: prefer "to <number>", fallback "<number> hours/hrs"
+        const hrsToMatch = text.match(/\bto\s+(\d+(?:\.\d+)?)\b/i);
+        const hrsUnitMatch = !hrsToMatch ? text.match(/(\d+(?:\.\d+)?)\s*(?:hours|hrs)\b/i) : null;
+        const hrsMatch = hrsToMatch || hrsUnitMatch;
+
+        // Extract identifier: empId or name
+        const idMatch = text.match(/(?:emp(?:loyee)?(?:\s*id)?[:\s]+|for\s+|of\s+)(\d{4,})/i)
+                      || text.match(/(?:^|[^.\d])(\d{6,})(?:[^.\d]|$)/);
+        const nameMatch = text.match(/(?:for|of|employee)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
 
         const identifier = idMatch ? idMatch[1] : (nameMatch ? nameMatch[1] : null);
         const newHrs = hrsMatch ? parseFloat(hrsMatch[1]) : null;
 
-        if (identifier && newHrs) {
-          // Use direct endpoint (no LLM)
+        // ═══ CASE 3: Exactly "reconcile" — apply all pending updates ═══
+        if (isExactReconcile) {
+          const res = await fetch(`${API_BASE}/reconcile`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: "reconcile" }),
+          });
+          const data = await res.json();
+
+          if (data.status === "success" && data.updates && data.updates.length > 0) {
+            await refreshData();
+            dispatch({ type: "RECONCILE_ROWS", payload: data.updates });
+            const summary = data.updates.map(u =>
+              `✅ ${u.name} (${u.empId}):\n   Timesheet: ${u.oldTimesheetHrs} → ${u.newTimesheetHrs} hrs\n   Actual Rate: $${u.newActualRate}\n   Variance: $${u.newVariance}`
+            ).join("\n\n");
+            setMsgs(prev => [...prev, {
+              sender: "assistant",
+              text: `🔄 Reconciliation Complete!\n\n${summary}\n\n${data.updates.length} row(s) reconciled and saved to Excel.`
+            }]);
+            dispatch({ type: "TOAST", payload: { type: "success", message: `Reconciled ${data.updates.length} row(s) successfully!` } });
+          } else if (data.status === "no_pending") {
+            setMsgs(prev => [...prev, { sender: "assistant", text: "✅ No pending updates to reconcile. All data is already up to date." }]);
+          } else {
+            setMsgs(prev => [...prev, { sender: "assistant", text: data.response || "No updates to apply." }]);
+          }
+
+        // ═══ CASE 2: Contains "reconcile" + identifier + hours -> write Excel ═══
+        } else if (containsReconcileWord && identifier && newHrs) {
           const res = await fetch(`${API_BASE}/reconcile-direct`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -933,38 +964,56 @@ function Chatbot() {
           const data = await res.json();
 
           if (data.status === "success" && data.updates) {
-            // Re-fetch fresh data from Excel immediately
             await refreshData();
-
+            dispatch({ type: "RECONCILE_ROWS", payload: data.updates });
             const summary = data.updates.map(u =>
               `✅ ${u.name} (${u.empId}):\n   Timesheet: ${u.oldTimesheetHrs} → ${u.newTimesheetHrs} hrs\n   Actual Rate: $${u.newActualRate}\n   Variance: $${u.newVariance}`
             ).join("\n\n");
-
             setMsgs(prev => [...prev, {
               sender: "assistant",
-              text: `🔄 Reconciliation Complete!\n\n${summary}\n\n${data.updates.length} row(s) updated. Changes are reflected in the table.`
+              text: `🔄 Reconciliation Complete!\n\n${summary}\n\n${data.updates.length} row(s) updated and saved to Excel.`
             }]);
             dispatch({ type: "TOAST", payload: { type: "success", message: `Reconciled ${data.updates.length} row(s) successfully!` } });
           } else if (data.error) {
             setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.error}` }]);
           }
-        } else {
-          // Fall back to LLM agent for complex prompts
-          const res = await fetch(`${API_BASE}/reconcile`, {
+
+        // ═══ CASE 1: No "reconcile" word + identifier + hours -> UI only, pending ═══
+        } else if (!containsReconcileWord && identifier && newHrs) {
+          const res = await fetch(`${API_BASE}/update-ui`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ prompt: text }),
+            body: JSON.stringify({ identifier, newTimesheetHrs: newHrs }),
           });
           const data = await res.json();
 
-          // Always re-fetch fresh data from Excel after agent response
-          await refreshData();
-
-          if (data.updates) {
-            dispatch({ type: "TOAST", payload: { type: "success", message: "Reconciliation applied!" } });
+          if (data.status === "success" && data.updates) {
+            dispatch({ type: "RECONCILE_ROWS", payload: data.updates });
+            const summary = data.updates.map(u =>
+              `⏳ ${u.name} (${u.empId}):\n   Timesheet: ${u.oldTimesheetHrs} → ${u.newTimesheetHrs} hrs\n   Actual Rate: $${u.newActualRate}\n   Variance: $${u.newVariance}\n   Status: PENDING (not saved to Excel)`
+            ).join("\n\n");
+            setMsgs(prev => [...prev, {
+              sender: "assistant",
+              text: `📝 Timesheet update saved for review.\n\n${summary}\n\nIf you want to reconcile, then type reconcile.`
+            }]);
+            dispatch({ type: "TOAST", payload: { type: "info", message: "Update pending — type 'reconcile' to save to Excel" } });
+          } else if (data.error) {
+            setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.error}` }]);
           }
 
-          setMsgs(prev => [...prev, { sender: "assistant", text: data.response || data.detail || "Reconciliation complete." }]);
+        // ═══ CASE 2 fallback: "reconcile" present but missing identifier or hours ═══
+        } else if (containsReconcileWord && (!identifier || newHrs == null)) {
+          setMsgs(prev => [...prev, {
+            sender: "assistant",
+            text: "⚠️ Timesheet update saved for review. If you want to reconcile, then type reconcile.\n\nPlease provide both an employee identifier (empId or name) AND a timesheet hours value."
+          }]);
+
+        // ═══ Fallback: missing info entirely ═══
+        } else {
+          setMsgs(prev => [...prev, {
+            sender: "assistant",
+            text: "I need both an employee identifier (empId or name) and a timesheet hours value to process an update.\n\nExample: \"Update timesheet for employee 2298348 to 160 hours\""
+          }]);
         }
       } catch (err) {
         setMsgs(prev => [...prev, {
@@ -1037,7 +1086,7 @@ function Chatbot() {
       inp.click();
       focusEnd();
     } },
-    { icon: "🔄", label: "Reconcile", action: () => { setInput("Reconcile timesheet hours for employee "); setCtxTitle("RECONCILE TIMESHEET"); setPocStep(null); setFile(null); focusEnd(); } },
+    { icon: "🔄", label: "Reconcile", action: () => { setInput("update timesheet hours for employee "); setCtxTitle("RECONCILE TIMESHEET"); setPocStep(null); setFile(null); focusEnd(); } },
     { icon: "📂", label: "Projects", action: () => { setInput("Add a new project using the uploaded Excel file.\n"); setCtxTitle("ADD A NEW PROJECT"); setPocStep(null); setFile(null); focusEnd(); } },
     { icon: "📝", label: "Misc", action: () => { setInput("Enter your miscellaneous request here:\n"); setCtxTitle("MISCELLANEOUS"); setPocStep(null); setFile(null); focusEnd(); } },
   ];
