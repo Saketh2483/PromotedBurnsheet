@@ -1,0 +1,20 @@
+{
+  "630149": {
+    "identifier": "630149",
+    "newTimesheetHrs": 171.5,
+    "empId": "630149",
+    "name": "Vasu Gattu",
+    "oldTimesheetHrs": 176.0,
+    "newActualRate": 3918.78,
+    "newVariance": -102.82,
+    "leaveDeduction": {
+      "leaveDays": 0.5,
+      "permissionHours": null,
+      "dailyHours": 9,
+      "hoursDeducted": 4.5,
+      "sowStream": "india",
+      "originalTimesheet": 176.0,
+      "adjustedTimesheet": 171.5
+    }
+  }
+}

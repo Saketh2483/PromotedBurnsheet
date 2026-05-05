@@ -90,7 +90,7 @@ const AppContext = createContext();
 const initialState = {
   region: "India",
   filters: { poc: "", classification: "" },
-  dollarRate: 86,
+  dollarRate: null,
   dollarRateChanged: false,
   allData: [],
   loading: true,
@@ -107,7 +107,15 @@ function reducer(state, action) {
     case "LOAD_DATA": {
       _originalData = action.payload;
       _originalDataMap = new Map(action.payload.map(r => [r.id, r]));
-      return { ...state, allData: action.payload, loading: false };
+      // Derive dollar rate from first India row: rateInr / rateUsd
+      let derivedRate = state.dollarRate;
+      if (derivedRate == null) {
+        const indiaRow = action.payload.find(r => r.country === "India" && r.rateUsd > 0 && r.rateInr > 0);
+        if (indiaRow) {
+          derivedRate = Math.round((indiaRow.rateInr / indiaRow.rateUsd) * 100) / 100;
+        }
+      }
+      return { ...state, allData: action.payload, loading: false, dollarRate: derivedRate };
     }
     case "SET_REGION": return { ...state, region: action.payload, currentPage: 1 };
     case "SET_FILTERS": return { ...state, filters: { ...state.filters, ...action.payload }, currentPage: 1 };
@@ -871,9 +879,10 @@ function Chatbot() {
   const [pocStep, setPocStep] = useState(null);
   const [ctxTitle, setCtxTitle] = useState("");
   const [typing, setTyping] = useState(false);
-  const [hoverBtn, setHoverBtn] = useState(false);
-  const [activeActionIdx, setActiveActionIdx] = useState(-1);
-  const [isMaximized, setIsMaximized] = useState(false);
+  const [hoverBtn, setHoverBtn] = useState(false);  const [activeActionIdx, setActiveActionIdx] = useState(-1);
+  const [isMaximized, setIsMaximized] = useState(false);  const [leaveMode, setLeaveMode] = useState(false);
+  const [leaveIdentifier, setLeaveIdentifier] = useState("");
+  const [leaveContext, setLeaveContext] = useState(null); // { identifier, leaveDays, permHours, leaveDate, half, pendingField }
   const inputRef = useRef(null);
   const fileRef = useRef(null);
   const scrollRef = useRef(null);
@@ -904,9 +913,183 @@ function Chatbot() {
   /* ── Respond logic ── */
   const respond = async (text) => {
     const lower = text.toLowerCase().trim();
-    if (lower === "/clear") { setMsgs([]); setInput(""); setFile(null); setPocStep(null); setCtxTitle(""); setActiveActionIdx(-1); return; }
-    setMsgs(prev => [...prev, { sender: "user", text, file: file ? file.name : null }]);
+    if (lower === "/clear") { setMsgs([]); setInput(""); setFile(null); setPocStep(null); setCtxTitle(""); setActiveActionIdx(-1); return; }    setMsgs(prev => [...prev, { sender: "user", text, file: file ? file.name : null }]);
     setFile(null); setTyping(true);
+
+    // --- Leave/Permission auto-detection (broad intent) ---
+    const isLeaveRelated = /\b(leave|permission|half\s*day|day\s*off|off\s*tomorrow|off\s*today)\b/i.test(lower);
+    if (isLeaveRelated) {
+      try {
+        // Parse permission hours: "2 hrs permission" or "3 hours permission"
+        const permMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:hrs?|hours?)\s*permission/i) || text.match(/permission\s*(?:of|for)?\s*(\d+(?:\.\d+)?)\s*(?:hrs?|hours?)/i);
+        // Parse leave days: "2 days leave" or "leave for 3 days" or "1 day leave"
+        const daysMatch = text.match(/(\d+(?:\.\d+)?)\s*days?\s*(?:of\s*)?(?:leave|off)/i) || text.match(/(?:leave|off)\s*(?:for|of)?\s*(\d+(?:\.\d+)?)\s*days?/i);
+        // Detect half-day
+        const isHalfDay = /\bhalf\s*(?:day|a\s*day)\b|0\.5\s*day/i.test(lower);        // Detect which half
+        const halfMatch = /\b(?:first\s*half|morning|FN|forenoon)\b/i.test(lower) ? "first" : /\b(?:second\s*half|afternoon|afternoo\w*|AN|evening)\b/i.test(lower) ? "second" : null;
+        // Parse date references
+        const dateMatch = text.match(/\b(tomorrow|today|next\s+\w+|\d{1,2}[\/\-]\d{1,2}[\/\-]?\d{0,4})\b/i);
+        const leaveDate = dateMatch ? dateMatch[1] : null;
+        // Parse identifier: name or empId
+        const idNumMatch = text.match(/\b(\d{6,})\b/);
+        const nameMatch = text.match(/([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)/);
+        const identifier = idNumMatch ? idNumMatch[1] : (nameMatch ? nameMatch[1] : null);
+        const permHours = permMatch ? parseFloat(permMatch[1]) : null;
+        let leaveDays = daysMatch ? parseFloat(daysMatch[1]) : null;
+        if (isHalfDay && !leaveDays) leaveDays = 0.5;
+
+        // Dynamic querying: missing identifier
+        if (!identifier) {
+          setMsgs(prev => [...prev, { sender: "assistant", text: "🏖️ **Leave Management**\n\nPlease provide the Employee ID or Name to proceed with the leave request." }]);
+          setTyping(false);
+          return;
+        }
+
+        // Dynamic querying: missing leave details (no days, no permission, no half-day, no date context)
+        if (!permHours && !leaveDays && !leaveDate) {
+          setMsgs(prev => [...prev, { sender: "assistant", text: "🏖️ **Leave Management**\n\nPlease specify one of the following:\n• Leave date or date range\n• Number of leave days\n• Permission hours\n\nExamples:\n• \"630149 taking 1 day leave tomorrow\"\n• \"630149 half day leave tomorrow morning\"\n• \"630149 2 hrs permission\"" }]);
+          setTyping(false);
+          return;
+        }
+
+        // If date mentioned but no explicit days/permission, assume 1 full day
+        if (!permHours && !leaveDays && leaveDate) {
+          leaveDays = 1;
+        }        // Dynamic querying: half-day without specifying which half
+        if (leaveDays === 0.5 && !halfMatch) {
+          setMsgs(prev => [...prev, { sender: "assistant", text: "🏖️ **Half-Day Leave**\n\nPlease confirm which half of the day:\n\n1. First Half / Morning\n2. Second Half / Afternoon" }]);
+          setLeaveMode(true);
+          setLeaveIdentifier(identifier);
+          setLeaveContext({ identifier, leaveDays, permHours, leaveDate, half: null, pendingField: "half" });
+          setTyping(false);
+          return;
+        }
+
+        const body = { identifier, leave_days: leaveDays, permission_hours: permHours, half: halfMatch, leave_date: leaveDate };
+        const res = await fetch(`${API_BASE}/leave/`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });        const data = await res.json();
+        if (data.status === "awaiting_confirmation") {
+          setLeaveMode(true);
+          setLeaveIdentifier(identifier);
+          setMsgs(prev => [...prev, { sender: "assistant", text: `🏖️ **Leave Request**\n\n${data.message}` }]);
+        } else if (data.status === "query") {
+          setMsgs(prev => [...prev, { sender: "assistant", text: `🏖️ **Leave Management**\n\n${data.message}` }]);
+        } else if (data.status === "error") {
+          setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.message}` }]);
+        } else {
+          setMsgs(prev => [...prev, { sender: "assistant", text: data.message }]);
+        }
+      } catch (err) {
+        setMsgs(prev => [...prev, { sender: "assistant", text: `⚠️ Leave agent unavailable: ${err.message}` }]);
+      }
+      setTyping(false);
+      return;
+    }    // --- Leave follow-up handling (pending field responses like "first half", "tomorrow", etc.) ---
+    if (leaveMode && leaveContext && leaveContext.pendingField) {
+      const pendingField = leaveContext.pendingField;
+
+      if (pendingField === "half") {
+        const halfReply = /\b(?:first\s*half|morning|FN|forenoon|1)\b/i.test(lower) ? "first" : /\b(?:second\s*half|afternoon|afternoo\w*|AN|evening|2)\b/i.test(lower) ? "second" : null;
+        if (halfReply) {
+          const ctx = { ...leaveContext, half: halfReply, pendingField: null };
+          // If date is also missing, ask for it
+          if (!ctx.leaveDate) {
+            setLeaveContext({ ...ctx, pendingField: "date" });
+            setMsgs(prev => [...prev, { sender: "assistant", text: "🏖️ **Leave Management**\n\nPlease provide the leave date (e.g., tomorrow, 12/05/2026)." }]);
+            setTyping(false);
+            return;
+          }
+          // All info available, submit to backend
+          const body = { identifier: ctx.identifier, leave_days: ctx.leaveDays, permission_hours: ctx.permHours, half: halfReply, leave_date: ctx.leaveDate };
+          try {
+            const res = await fetch(`${API_BASE}/leave/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            const data = await res.json();
+            if (data.status === "awaiting_confirmation") {
+              setLeaveContext(null);
+              setMsgs(prev => [...prev, { sender: "assistant", text: `🏖️ **Leave Request**\n\n${data.message}` }]);
+            } else if (data.status === "query") {
+              setMsgs(prev => [...prev, { sender: "assistant", text: `🏖️ **Leave Management**\n\n${data.message}` }]);
+            } else if (data.status === "error") {
+              setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.message}` }]);
+              setLeaveMode(false); setLeaveContext(null);
+            } else {
+              setMsgs(prev => [...prev, { sender: "assistant", text: data.message }]);
+            }
+          } catch (err) {
+            setMsgs(prev => [...prev, { sender: "assistant", text: `⚠️ Leave agent unavailable: ${err.message}` }]);
+            setLeaveMode(false); setLeaveContext(null);
+          }
+          setTyping(false);
+          return;
+        } else {
+          setMsgs(prev => [...prev, { sender: "assistant", text: "🏖️ **Half-Day Leave**\n\nPlease specify:\n\n1. First Half / Morning\n2. Second Half / Afternoon" }]);
+          setTyping(false);
+          return;
+        }
+      }
+
+      if (pendingField === "date") {
+        const dateReply = text.match(/\b(tomorrow|today|next\s+\w+|\d{1,2}[\/\-]\d{1,2}[\/\-]?\d{0,4})\b/i);
+        if (dateReply) {
+          const ctx = { ...leaveContext, leaveDate: dateReply[1], pendingField: null };
+          const body = { identifier: ctx.identifier, leave_days: ctx.leaveDays, permission_hours: ctx.permHours, half: ctx.half, leave_date: ctx.leaveDate };
+          try {
+            const res = await fetch(`${API_BASE}/leave/`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+            const data = await res.json();
+            if (data.status === "awaiting_confirmation") {
+              setLeaveContext(null);
+              setMsgs(prev => [...prev, { sender: "assistant", text: `🏖️ **Leave Request**\n\n${data.message}` }]);
+            } else if (data.status === "query") {
+              setMsgs(prev => [...prev, { sender: "assistant", text: `🏖️ **Leave Management**\n\n${data.message}` }]);
+            } else if (data.status === "error") {
+              setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.message}` }]);
+              setLeaveMode(false); setLeaveContext(null);
+            } else {
+              setMsgs(prev => [...prev, { sender: "assistant", text: data.message }]);
+            }
+          } catch (err) {
+            setMsgs(prev => [...prev, { sender: "assistant", text: `⚠️ Leave agent unavailable: ${err.message}` }]);
+            setLeaveMode(false); setLeaveContext(null);
+          }
+          setTyping(false);
+          return;
+        } else {
+          setMsgs(prev => [...prev, { sender: "assistant", text: "🏖️ **Leave Management**\n\nPlease provide a valid date (e.g., tomorrow, today, 12/05/2026)." }]);
+          setTyping(false);
+          return;
+        }
+      }
+    }
+
+    // --- Leave confirmation handling (CONFIRM/CANCEL) ---
+    if (leaveMode && /^(confirm|yes|cancel|no)/i.test(lower)) {
+      try {
+        const action = /^(confirm|yes)/i.test(lower) ? "confirm" : "cancel";
+        const res = await fetch(`${API_BASE}/leave/confirm`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ identifier: leaveIdentifier, action }),
+        });
+        const data = await res.json();
+        if (data.status === "confirmed") {
+          const msg = `✅ **Leave Confirmed**\n\n👤 ${data.employeeName} (${data.empId})\n📋 SOW: ${data.sowStream} (${data.dailyHours} hrs/day)\n🏖️ ${data.leaveType}: ${data.hoursDeducted} hrs deducted\n📊 Timesheet: ${data.originalTimesheet} → ${data.adjustedTimesheet} hrs\n\nLeave recorded successfully. Pending reconciliation is required to apply changes.`;
+          setMsgs(prev => [...prev, { sender: "assistant", text: msg }]);
+          dispatch({ type: "RECONCILE_ROWS", payload: [{ empId: data.empId, name: data.employeeName, newTimesheetHrs: data.adjustedTimesheet }] });
+        } else if (data.status === "cancelled") {
+          setMsgs(prev => [...prev, { sender: "assistant", text: `🚫 ${data.message}` }]);
+        } else {
+          setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.message}` }]);
+        }
+      } catch (err) {
+        setMsgs(prev => [...prev, { sender: "assistant", text: `⚠️ ${err.message}` }]);
+      }      setTyping(false);
+      setLeaveMode(false);
+      setLeaveContext(null);
+      return;
+    }
 
     // --- Reconcile-related detection ---
     const isExactReconcile = lower === "reconcile";
@@ -976,27 +1159,33 @@ function Chatbot() {
             dispatch({ type: "TOAST", payload: { type: "success", message: `Reconciled ${data.updates.length} row(s) successfully!` } });
           } else if (data.error) {
             setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.error}` }]);
-          }
-
-        // ═══ CASE 1: No "reconcile" word + identifier + hours -> UI only, pending ═══
+          }        // ═══ CASE 1: No "reconcile" word + identifier + hours -> UI only, pending ═══
         } else if (!containsReconcileWord && identifier && newHrs) {
-          const res = await fetch(`${API_BASE}/update-ui`, {
+          // Use the main /reconcile endpoint for leave detection support
+          const res = await fetch(`${API_BASE}/reconcile`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ identifier, newTimesheetHrs: newHrs }),
+            body: JSON.stringify({ prompt: text }),
           });
           const data = await res.json();
 
           if (data.status === "success" && data.updates) {
             dispatch({ type: "RECONCILE_ROWS", payload: data.updates });
+            let leaveInfo = "";
+            if (data.leaveDeduction) {
+              const ld = data.leaveDeduction;
+              leaveInfo = `\n\n🏖️ Leave Deduction:\n   Days: ${ld.leaveDays}\n   SOW Stream: ${ld.sowStream}\n   Daily Hours: ${ld.dailyHours}\n   Hours Deducted: ${ld.hoursDeducted}\n   Original Timesheet: ${ld.originalTimesheet} → Adjusted: ${ld.adjustedTimesheet}`;
+            }
             const summary = data.updates.map(u =>
               `⏳ ${u.name} (${u.empId}):\n   Timesheet: ${u.oldTimesheetHrs} → ${u.newTimesheetHrs} hrs\n   Actual Rate: $${u.newActualRate}\n   Variance: $${u.newVariance}\n   Status: PENDING (not saved to Excel)`
             ).join("\n\n");
             setMsgs(prev => [...prev, {
               sender: "assistant",
-              text: `📝 Timesheet update saved for review.\n\n${summary}\n\nIf you want to reconcile, then type reconcile.`
+              text: `📝 Timesheet update saved for review.${leaveInfo}\n\n${summary}\n\nIf you want to reconcile, then type reconcile.`
             }]);
             dispatch({ type: "TOAST", payload: { type: "info", message: "Update pending — type 'reconcile' to save to Excel" } });
+          } else if (data.response) {
+            setMsgs(prev => [...prev, { sender: "assistant", text: data.response }]);
           } else if (data.error) {
             setMsgs(prev => [...prev, { sender: "assistant", text: `❌ ${data.error}` }]);
           }
@@ -1006,14 +1195,35 @@ function Chatbot() {
           setMsgs(prev => [...prev, {
             sender: "assistant",
             text: "⚠️ Timesheet update saved for review. If you want to reconcile, then type reconcile.\n\nPlease provide both an employee identifier (empId or name) AND a timesheet hours value."
-          }]);
-
-        // ═══ Fallback: missing info entirely ═══
+          }]);        // ═══ Fallback: missing info entirely ═══
         } else {
-          setMsgs(prev => [...prev, {
-            sender: "assistant",
-            text: "I need both an employee identifier (empId or name) and a timesheet hours value to process an update.\n\nExample: \"Update timesheet for employee 2298348 to 160 hours\""
-          }]);
+          // Send to backend which can detect leave keywords
+          const res = await fetch(`${API_BASE}/reconcile`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: text }),
+          });
+          const data = await res.json();
+          if (data.status === "success" && data.updates) {
+            dispatch({ type: "RECONCILE_ROWS", payload: data.updates });
+            let leaveInfo = "";
+            if (data.leaveDeduction) {
+              const ld = data.leaveDeduction;
+              leaveInfo = `\n\n🏖️ Leave Deduction:\n   Days: ${ld.leaveDays}\n   SOW Stream: ${ld.sowStream}\n   Daily Hours: ${ld.dailyHours}\n   Hours Deducted: ${ld.hoursDeducted}\n   Original Timesheet: ${ld.originalTimesheet} → Adjusted: ${ld.adjustedTimesheet}`;
+            }
+            const summary = data.updates.map(u =>
+              `⏳ ${u.name} (${u.empId}):\n   Timesheet: ${u.oldTimesheetHrs} → ${u.newTimesheetHrs} hrs\n   Actual Rate: $${u.newActualRate}\n   Variance: $${u.newVariance}\n   Status: ${data.excelUpdated ? "RECONCILED ✅" : "PENDING"}`
+            ).join("\n\n");
+            setMsgs(prev => [...prev, { sender: "assistant", text: `${data.response}${leaveInfo}\n\n${summary}` }]);
+            if (data.excelUpdated) {
+              await refreshData();
+              dispatch({ type: "TOAST", payload: { type: "success", message: "Reconciled successfully!" } });
+            } else {
+              dispatch({ type: "TOAST", payload: { type: "info", message: "Update pending — type 'reconcile' to save to Excel" } });
+            }
+          } else {
+            setMsgs(prev => [...prev, { sender: "assistant", text: data.response || "I need both an employee identifier (empId or name) and a timesheet hours value to process an update.\n\nExample: \"Update timesheet for employee 2298348 to 160 hours\"" }]);
+          }
         }
       } catch (err) {
         setMsgs(prev => [...prev, {
@@ -1085,8 +1295,8 @@ function Chatbot() {
       inp.onchange = (ev) => { const f = ev.target.files[0]; if (!f) return; setFile(f); setInput(""); focusEnd(); };
       inp.click();
       focusEnd();
-    } },
-    { icon: "🔄", label: "Reconcile", action: () => { setInput("update timesheet hours for employee "); setCtxTitle("RECONCILE TIMESHEET"); setPocStep(null); setFile(null); focusEnd(); } },
+    } },    { icon: "🔄", label: "Reconcile", action: () => { setInput("update timesheet hours for employee "); setCtxTitle("RECONCILE TIMESHEET"); setPocStep(null); setFile(null); focusEnd(); } },
+    { icon: "🏖️", label: "Leave", action: () => { setInput(""); setCtxTitle("LEAVE MANAGEMENT"); setPocStep(null); setFile(null); setMsgs(prev => [...prev, { sender: "assistant", text: "🏖️ **Leave Management Agent**\n\nTell me the employee and leave/permission details.\n\nExamples:\n• \"Ramamoorthy Swetha is going on 2 hrs permission\"\n• \"Employee 630149 takes 3 days leave\"\n• \"2 days off for Vasu Gattu\"\n\nSOW hours are auto-detected from employee's location." }]); focusEnd(); } },
     { icon: "📂", label: "Projects", action: () => { setInput("Add a new project using the uploaded Excel file.\n"); setCtxTitle("ADD A NEW PROJECT"); setPocStep(null); setFile(null); focusEnd(); } },
     { icon: "📝", label: "Misc", action: () => { setInput("Enter your miscellaneous request here:\n"); setCtxTitle("MISCELLANEOUS"); setPocStep(null); setFile(null); focusEnd(); } },
   ];
@@ -1582,7 +1792,27 @@ export default function App() {
     }
   }, []);
 
-  useEffect(() => { if (loggedIn) refreshData(); }, [loggedIn, refreshData]);
+  useEffect(() => {
+    if (loggedIn) {
+      // Load data first, THEN apply pending updates after data is loaded
+      refreshData().then(() => {
+        fetch(`${API_BASE}/pending`).then(r => r.json()).then(data => {
+          if (data.pending && data.pending.length > 0) {
+            const updates = data.pending.map(p => ({
+              empId: p.empId,
+              name: p.name,
+              oldTimesheetHrs: p.oldTimesheetHrs,
+              newTimesheetHrs: p.newTimesheetHrs,
+              newActualRate: p.newActualRate,
+              newVariance: p.newVariance,
+              leaveDeduction: p.leaveDeduction || null,
+            }));
+            dispatch({ type: "RECONCILE_ROWS", payload: updates });
+          }
+        }).catch(() => {});
+      });
+    }
+  }, [loggedIn, refreshData]);
 
   const handleExportPDF = useCallback(async () => {
     await exportToPDF(
