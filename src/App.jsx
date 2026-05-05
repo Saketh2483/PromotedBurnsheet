@@ -90,7 +90,7 @@ const AppContext = createContext();
 const initialState = {
   region: "India",
   filters: { poc: "", classification: "" },
-  dollarRate: 86,
+  dollarRate: null,
   dollarRateChanged: false,
   allData: [],
   loading: true,
@@ -107,7 +107,15 @@ function reducer(state, action) {
     case "LOAD_DATA": {
       _originalData = action.payload;
       _originalDataMap = new Map(action.payload.map(r => [r.id, r]));
-      return { ...state, allData: action.payload, loading: false };
+      // Derive dollar rate from first India row: rateInr / rateUsd
+      let derivedRate = state.dollarRate;
+      if (derivedRate == null) {
+        const indiaRow = action.payload.find(r => r.country === "India" && r.rateUsd > 0 && r.rateInr > 0);
+        if (indiaRow) {
+          derivedRate = Math.round((indiaRow.rateInr / indiaRow.rateUsd) * 100) / 100;
+        }
+      }
+      return { ...state, allData: action.payload, loading: false, dollarRate: derivedRate };
     }
     case "SET_REGION": return { ...state, region: action.payload, currentPage: 1 };
     case "SET_FILTERS": return { ...state, filters: { ...state.filters, ...action.payload }, currentPage: 1 };
@@ -1246,7 +1254,14 @@ function RegionTabs() {
 function FilterBar() {
   const { state, dispatch } = useContext(AppContext);
   const filterOpts = useMemo(() => deriveFilterOptions(getFilteredData(state.allData, state.region, {})), [state.allData, state.region]);
-  const [rateInput, setRateInput] = useState(String(state.dollarRate));
+  const [rateInput, setRateInput] = useState(state.dollarRate != null ? String(state.dollarRate) : "");
+
+  // Sync rateInput when dollarRate is derived from data
+  useEffect(() => {
+    if (state.dollarRate != null && rateInput === "") {
+      setRateInput(String(state.dollarRate));
+    }
+  }, [state.dollarRate]);
 
   const handleRateChange = (e) => {
     const val = e.target.value;
